@@ -1,0 +1,59 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: is the request authenticated as `uid`?
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.role == "admin";
+    }
+
+    // Users can read/write only their own user document. Admins can read all.
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow write: if isOwner(userId) || isAdmin();
+    }
+
+    // Each collection below is scoped to a `userId` / `ownerId` field.
+    // Clients may only touch rows they own; admins may touch all.
+    match /projects/{projectId} {
+      allow read, write: if isAdmin() ||
+        (isSignedIn() && request.auth.uid == resource.data.ownerId);
+      allow create: if isSignedIn() &&
+        request.resource.data.ownerId == request.auth.uid;
+    }
+
+    match /jobs/{jobId} {
+      allow read, write: if isAdmin() ||
+        (isSignedIn() && request.auth.uid == resource.data.ownerId);
+      allow create: if isSignedIn() &&
+        request.resource.data.ownerId == request.auth.uid;
+    }
+
+    match /gpu_instances/{instanceId} {
+      allow read: if isAdmin() ||
+        (isSignedIn() && request.auth.uid == resource.data.userId);
+      // Mutations go through the server (Stripe webhook, /api/gpu/*). Block
+      // direct client writes to avoid tampering with status/provider fields.
+      allow write: if isAdmin();
+    }
+
+    match /billing_events/{eventId} {
+      allow read: if isAdmin() ||
+        (isSignedIn() && request.auth.uid == resource.data.userId);
+      // Billing events are authoritative — only the server may write them.
+      allow write: if isAdmin();
+    }
+
+    // Default deny. Add explicit matches above before opening new collections.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
